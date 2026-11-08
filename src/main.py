@@ -34,6 +34,20 @@ def main():
         def smoke():
             before=len(window.history.items());window.history.add_text('portable smoke synthetic text');window.refresh()
             report={'visible':window.isVisible(),'database':str(data),'records_before':before,'records_after':len(window.history.items()),'paused':window.paused,'runtime':str(getattr(sys,'_MEIPASS','')),'hotkey_registered':window.hotkey_registered}
+            from PyQt6.QtCore import Qt
+            # Exercise the actual packaged settings path without registering a
+            # global key or accessing the system clipboard in this paused mode.
+            window.settings_button.click();dialog=window.settings_window
+            app.processEvents()
+            report['settings_visible']=bool(dialog and dialog.isVisible())
+            report['settings_topmost']=bool(dialog and dialog.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+            report['settings_modal']=app.activeModalWidget() is dialog
+            dialog.grab().save(str(args.smoke_test.with_name(args.smoke_test.stem+'-settings.png')))
+            dialog.reject();app.processEvents()
+            report['settings_closed']=window.settings_window is None
+            window.settings_dialog();report['settings_reopened']=bool(window.settings_window and window.settings_window.isVisible());window.settings_window.reject()
+            from ui_smoke import check_interaction
+            report['interaction']=check_interaction(window,args.smoke_test)
             window.grab().save(str(args.smoke_test.with_suffix('.png')));args.smoke_test.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8');window.exit_button.click()
         QTimer.singleShot(400,smoke)
     result=app.exec();original_shutdown()

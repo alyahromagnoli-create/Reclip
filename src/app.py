@@ -51,6 +51,22 @@ def time_label(ns):
     if delta<3600:return f'{max(1,int(delta//60))} 分钟前'
     return dt.strftime('%H:%M') if dt.date()==datetime.now().date() else dt.strftime('%m-%d %H:%M')
 
+class TitleBar(QFrame):
+    """Explicit drag surface; child labels pass mouse input to this frame."""
+    def __init__(self,parent):
+        super().__init__(parent);self.drag_offset=None
+        self.setCursor(Qt.CursorShape.SizeAllCursor);self.setToolTip('按住这里拖动窗口')
+    def mousePressEvent(self,event):
+        if event.button()==Qt.MouseButton.LeftButton:
+            self.drag_offset=event.globalPosition().toPoint()-self.window().pos();event.accept()
+        else:super().mousePressEvent(event)
+    def mouseMoveEvent(self,event):
+        if self.drag_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self.window().move(event.globalPosition().toPoint()-self.drag_offset);event.accept()
+        else:super().mouseMoveEvent(event)
+    def mouseReleaseEvent(self,event):
+        self.drag_offset=None;super().mouseReleaseEvent(event)
+
 class ReclipWindow(QWidget):
     quit_requested=pyqtSignal()
     def __init__(self,data_path,register_hotkey=True):
@@ -61,8 +77,10 @@ class ReclipWindow(QWidget):
         self.setObjectName('window');self.setStyleSheet(STYLE);self.resize(510,740);self.setMinimumSize(420,540)
         self.icon=QIcon(str(Path(__file__).resolve().parent/'resources'/'Reclip.ico'));self.setWindowIcon(self.icon)
         v=QVBoxLayout(self);v.setContentsMargins(20,18,20,16);v.setSpacing(12)
-        h=QHBoxLayout();brand=text_label('Reclip');brand.setObjectName('brand');h.addWidget(brand,1);self.hotkey_badge=text_label(self.hotkey_text,True);h.addWidget(self.hotkey_badge)
-        self.settings_button=btn('设置',self.settings_dialog);h.addWidget(self.settings_button);h.addWidget(btn('收起',self.hide));v.addLayout(h)
+        self.title_bar=TitleBar(self);h=QHBoxLayout(self.title_bar);h.setContentsMargins(0,0,0,0)
+        brand=text_label('Reclip');brand.setObjectName('brand');h.addWidget(brand,1);self.hotkey_badge=text_label(self.hotkey_text,True);h.addWidget(self.hotkey_badge)
+        for label in (brand,self.hotkey_badge):label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.settings_button=btn('设置',self.settings_dialog);h.addWidget(self.settings_button);h.addWidget(btn('收起',self.hide));v.addWidget(self.title_bar)
         v.addWidget(text_label('回拾 · 最近 50 次复制的时光',True))
         h=QHBoxLayout();self.search=QLineEdit();self.search.setPlaceholderText('搜索以前复制的文字…');self.search.textChanged.connect(self.refresh);h.addWidget(self.search,1)
         self.kind=QComboBox();self.kind.addItems(['全部','文本','图片']);self.kind.currentIndexChanged.connect(self.refresh);h.addWidget(self.kind);v.addLayout(h)
@@ -71,7 +89,7 @@ class ReclipWindow(QWidget):
         tools=QHBoxLayout();self.clean_button=btn('纯文本',lambda:self.preview('clean'));tools.addWidget(self.clean_button);self.urls_button=btn('提取网址',lambda:self.preview('urls'));tools.addWidget(self.urls_button);self.emails_button=btn('提取邮箱',lambda:self.preview('emails'));tools.addWidget(self.emails_button);self.translate_button=btn('在线翻译',self.translate);tools.addWidget(self.translate_button);v.addLayout(tools)
         self.status=text_label('');self.status.setObjectName('status');v.addWidget(self.status)
         h=QHBoxLayout();self.count=text_label('0 / 50',True);h.addWidget(self.count);h.addStretch();self.pause_button=btn('',self.toggle_pause);h.addWidget(self.pause_button);h.addWidget(btn('清空',self.clear_history));self.exit_button=btn('退出',self.request_quit);h.addWidget(self.exit_button);v.addLayout(h)
-        v.addWidget(text_label('点条目粘贴 · 右键处理／删除 · Enter 粘贴 · Esc 收起',True))
+        v.addWidget(text_label('拖动顶部移动窗口 · Enter 粘贴 · Esc 收起',True))
         self.tray=QSystemTrayIcon(self.icon,self);self.tray.setToolTip('Reclip｜回拾 · '+self.hotkey_text)
         menu=QMenu();menu.addAction('呼出回拾',self.summon);self.pause_action=menu.addAction('暂停记录',self.toggle_pause);self.pause_action.setCheckable(True);menu.addAction('设置',self.settings_dialog);menu.addSeparator();menu.addAction('退出',self.request_quit);self.tray.setContextMenu(menu)
         self.tray.activated.connect(lambda reason:self.summon() if reason in (QSystemTrayIcon.ActivationReason.Trigger,QSystemTrayIcon.ActivationReason.DoubleClick) else None)
@@ -89,8 +107,7 @@ class ReclipWindow(QWidget):
         self.refresh();self.update_pause()
         if register_hotkey and not self.hotkey_registered:self.status.setText('热键被占用，未注册其他组合。请在设置中自行选择。')
     def mousePressEvent(self,event):
-        if event.button()==Qt.MouseButton.LeftButton and event.position().y()<75 and self.windowHandle():self.windowHandle().startSystemMove()
-        else:super().mousePressEvent(event)
+        super().mousePressEvent(event)
     def keyPressEvent(self,event):
         if event.key()==Qt.Key.Key_Escape:self.hide();event.accept()
         elif event.key() in (Qt.Key.Key_Return,Qt.Key.Key_Enter):self.paste_selected();event.accept()
@@ -204,7 +221,22 @@ class ReclipWindow(QWidget):
         menu.addSeparator();menu.addAction('删除这条',lambda:self.delete_clip(id));menu.exec(self.list.mapToGlobal(point))
     def delete_clip(self,id):self.history.delete(id);self.refresh();self.status.setText('已删除这条历史。')
     def clear_history(self):
-        if QMessageBox.question(self,'清空历史','删除本地全部 50 条以内的历史？系统剪贴板当前内容不会被清空。')==QMessageBox.StandardButton.Yes:self.history.clear();self.refresh();self.status.setText('本地历史已清空。')
+        def confirmed():self.history.clear();self.refresh();self.status.setText('本地历史已清空。')
+        self.message(self,'清空历史','删除本地全部 50 条以内的历史？系统剪贴板当前内容不会被清空。',confirmed)
+    def open_dialog(self,d):
+        self.pending_paste=None
+        d.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint,True)
+        d.finished.connect(d.deleteLater)
+        d.open();d.raise_();d.activateWindow()
+    def message(self,parent,title,text,on_yes=None):
+        d=QMessageBox(parent);d.setWindowTitle(title);d.setText(text)
+        if on_yes is not None:
+            d.setIcon(QMessageBox.Icon.Question)
+            d.setStandardButtons(QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No)
+            d.setDefaultButton(QMessageBox.StandardButton.No)
+            d.finished.connect(lambda result:on_yes() if result==int(QMessageBox.StandardButton.Yes) else None)
+        else:d.setIcon(QMessageBox.Icon.Warning);d.setStandardButtons(QMessageBox.StandardButton.Ok)
+        self.open_dialog(d)
     def process_text(self,mode):
         row=self.history.get(self.selected_id())
         if not row or row['kind']!='text':return ''
@@ -215,21 +247,29 @@ class ReclipWindow(QWidget):
         if not row:return
         d=QDialog(self);d.setWindowTitle({'clean':'清洗为纯文本','urls':'提取网址','emails':'提取邮箱','view':'预览'}[mode]);d.resize(620,440);v=QVBoxLayout(d)
         if row['kind']=='image':
-            label=QLabel();pix=QPixmap();pix.loadFromData(row['image'],'PNG');label.setPixmap(pix.scaled(580,340,Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation));v.addWidget(label);v.addWidget(btn('关闭',d.accept));d.exec();return
+            label=QLabel();pix=QPixmap();pix.loadFromData(row['image'],'PNG');label.setPixmap(pix.scaled(580,340,Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation));v.addWidget(label);v.addWidget(btn('关闭',d.accept));self.open_dialog(d);return
         result=self.process_text(mode);edit=QPlainTextEdit(result);v.addWidget(edit)
         v.addWidget(text_label('结果可编辑。复制结果为纯文本，不含富文本格式。' if result else '没有找到匹配内容。',True))
         h=QHBoxLayout()
         def copy():self.copy_text(edit.toPlainText());self.status.setText('结果已复制为纯文本。');d.accept()
         def paste():self.copy_text(edit.toPlainText());d.accept();self.perform_paste()
-        h.addWidget(btn('复制结果',copy));h.addWidget(btn('粘贴回原窗口',paste,True));h.addWidget(btn('关闭',d.reject));v.addLayout(h);d.exec()
+        h.addWidget(btn('复制结果',copy));h.addWidget(btn('粘贴回原窗口',paste,True));h.addWidget(btn('关闭',d.reject));v.addLayout(h);self.open_dialog(d)
     def translate(self):
         row=self.history.get(self.selected_id())
         if not row or row['kind']!='text':return
         try:url=translation_url(row['text'])
         except ValueError as exc:self.status.setText(str(exc));return
-        if QMessageBox.question(self,'打开在线翻译','将把当前这一条文字发送至 Bing 翻译网页。其他历史不会发送。是否继续？')==QMessageBox.StandardButton.Yes:QDesktopServices.openUrl(QUrl(url))
+        self.message(self,'打开在线翻译','将把当前这一条文字发送至 Bing 翻译网页。其他历史不会发送。是否继续？',lambda:QDesktopServices.openUrl(QUrl(url)))
     def settings_dialog(self):
-        d=QDialog(self);d.setWindowTitle('Reclip 设置');v=QVBoxLayout(d);v.addWidget(text_label('呼出快捷键'))
+        existing=getattr(self,'settings_window',None)
+        if existing is not None and existing.isVisible():
+            existing.raise_();existing.activateWindow();return
+        self.pending_paste=None
+        # The owner is a topmost Tool window. A normal modal dialog can be
+        # obscured by it while disabling the owner, appearing to freeze the UI.
+        d=QDialog(self,Qt.WindowType.Dialog|Qt.WindowType.WindowStaysOnTopHint)
+        self.settings_window=d
+        d.setWindowTitle('Reclip 设置');v=QVBoxLayout(d);v.addWidget(text_label('呼出快捷键'))
         editor=QKeySequenceEdit(QKeySequence(self.hotkey_text));editor.setMaximumSequenceLength(1);v.addWidget(editor)
         v.addWidget(text_label('使用修饰键加字母、数字或 F1–F11，例如 Alt+V、Ctrl+Alt+V。冲突时会保留旧热键。',True));v.addWidget(text_label(f'本地记录：{self.history.path}\n文本上限 1 MiB，单图上限 20 MiB。\n关闭浮窗会收起到托盘；窗口“退出”或托盘菜单可退出。',True))
         row=QHBoxLayout()
@@ -237,16 +277,23 @@ class ReclipWindow(QWidget):
             combo=editor.keySequence().toString(QKeySequence.SequenceFormat.PortableText)
             try:
                 parse_hotkey(combo)
-                if not self.hk.register(combo):QMessageBox.warning(d,'热键被占用','这个组合键无法注册。原热键仍保留，请选择其他组合。');return
-            except ValueError as exc:QMessageBox.warning(d,'组合键无效',str(exc));return
+                if not self.hk.register(combo):self.message(d,'热键被占用','这个组合键无法注册。原热键仍保留，请选择其他组合。');return
+            except ValueError as exc:self.message(d,'组合键无效',str(exc));return
             self.hotkey_registered=True;self.hotkey_text=combo;self.history.setting('hotkey',combo);self.hotkey_badge.setText(combo);self.tray.setToolTip('Reclip｜回拾 · '+combo);self.update_pause();d.accept()
-        row.addWidget(btn('保存',save,True));row.addWidget(btn('取消',d.reject));v.addLayout(row);d.exec()
+        row.addWidget(btn('保存',save,True));row.addWidget(btn('取消',d.reject));v.addLayout(row)
+        def finished(_result):
+            if self.settings_window is d:self.settings_window=None
+        d.finished.connect(finished)
+        # Keep modal input rules without a nested exec() loop; retain ownership
+        # until the nonblocking dialog finishes, including when opened via tray.
+        self.open_dialog(d)
     def closeEvent(self,event):
         if not self.quitting and self.tray.isVisible():self.hide();event.ignore()
         else:event.accept()
     def shutdown(self):
         if self.closed:return
         self.quitting=True;self.closed=True;self.pending_paste=None
+        for dialog in self.findChildren(QDialog):dialog.reject()
         try:self.clipboard.dataChanged.disconnect(self.capture)
         except (TypeError,RuntimeError):pass
         self.hk.close();self.tray.hide();self.history.close();self.close()
